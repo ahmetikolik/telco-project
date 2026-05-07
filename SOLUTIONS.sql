@@ -1,24 +1,27 @@
---------------------------------------------------------------------------------
--- Telco Project - SQL Solutions (Oracle XE)
+--==============================================================================
+-- Telco Project — Combined Solutions File
 -- Author: Ahmet Yıldırım
 --
--- Each query is preceded by a comment block of at least 3 sentences explaining
--- the approach, the joins/filters used, and any edge cases I considered.
---------------------------------------------------------------------------------
-
-
---==============================================================================
--- 1. Tariff-Based Customer Queries
---==============================================================================
-
---------------------------------------------------------------------------------
--- 1.1 - List the customers subscribed to the 'Kobiye Destek' tariff.
+-- This file contains the same 12 SQL answers that live in the per-section
+-- files inside `queries/`. I keep both because the i2i brief specifically
+-- asks for a single SOLUTIONS.sql, while the per-section split makes it
+-- easier to run / review individual sections during development.
 --
--- I join CUSTOMERS to TARIFFS so I can filter by tariff NAME instead of
--- hard-coding the TARIFF_ID — that way the query keeps working even if the
--- tariff IDs are reassigned in the future. I select the columns a non-technical
--- requester would actually want to see (id, name, city, signup date) and order
--- alphabetically by name to make the output easy to scan.
+-- Each query has a comment block (>= 3 sentences) explaining the approach.
+--==============================================================================
+
+
+--==============================================================================
+-- Section 1 — Tariff-Based Customer Queries
+--==============================================================================
+
+--------------------------------------------------------------------------------
+-- 1.1  Customers subscribed to the 'Kobiye Destek' tariff.
+--
+-- I filter by tariff NAME instead of hard-coding TARIFF_ID, which keeps the
+-- query stable if the IDs are ever reassigned. The IDX_CUSTOMERS_TARIFF index
+-- handles the lookup once Oracle resolves the tariff id from the join. I sort
+-- alphabetically by customer name so the output is easy to scan by hand.
 --------------------------------------------------------------------------------
 SELECT  c.CUSTOMER_ID,
         c.NAME,
@@ -31,44 +34,50 @@ ORDER BY c.NAME;
 
 
 --------------------------------------------------------------------------------
--- 1.2 - Find the newest customer who subscribed to the 'Kobiye Destek' tariff.
+-- 1.2  Newest customer on the 'Kobiye Destek' tariff.
 --
--- "Newest" here means the most recent SIGNUP_DATE, not the highest CUSTOMER_ID,
--- because IDs and signup order are not guaranteed to match (see the hint in 3.1).
--- I order DESC by SIGNUP_DATE and use FETCH FIRST 1 ROW WITH TIES so that if
--- two customers signed up on the exact same most-recent day, both are returned.
+-- I use ROW_NUMBER() OVER (ORDER BY signup_date DESC) inside a CTE, then take
+-- the row whose number is 1. This pattern is easy to extend later if the team
+-- asks for "the newest 5" or "the newest per city" — only the WHERE clause
+-- needs to change. ROW_NUMBER also makes the intent explicit (chronological
+-- order, not row order), which I prefer for readability.
 --------------------------------------------------------------------------------
-SELECT  c.CUSTOMER_ID,
-        c.NAME,
-        c.CITY,
-        c.SIGNUP_DATE
-FROM    CUSTOMERS c
-JOIN    TARIFFS   t ON c.TARIFF_ID = t.TARIFF_ID
-WHERE   t.NAME = 'Kobiye Destek'
-ORDER BY c.SIGNUP_DATE DESC
-FETCH FIRST 1 ROW WITH TIES;
+WITH ranked AS (
+    SELECT  c.CUSTOMER_ID,
+            c.NAME,
+            c.CITY,
+            c.SIGNUP_DATE,
+            ROW_NUMBER() OVER (ORDER BY c.SIGNUP_DATE DESC) AS rn
+    FROM    CUSTOMERS c
+    JOIN    TARIFFS   t ON c.TARIFF_ID = t.TARIFF_ID
+    WHERE   t.NAME = 'Kobiye Destek'
+)
+SELECT CUSTOMER_ID, NAME, CITY, SIGNUP_DATE
+FROM   ranked
+WHERE  rn = 1;
 
 
 --==============================================================================
--- 2. Tariff Distribution
+-- Section 2 — Tariff Distribution
 --==============================================================================
 
 --------------------------------------------------------------------------------
--- 2.1 - Distribution of tariffs among the customers.
+-- 2.1  Distribution of tariffs across the customer base.
 --
--- I group by tariff name to count how many customers each tariff has, and I
--- LEFT JOIN from TARIFFS so that a tariff with zero customers still appears
--- in the output as 0 (an INNER JOIN would silently hide it). I also include
--- a percentage column to make the distribution easier to read at a glance.
+-- I LEFT JOIN from TARIFFS so that a tariff with zero subscribers still shows
+-- up as 0 — an INNER JOIN would silently drop it and a stakeholder reading the
+-- output might miss the fact that a tariff is unpopular. The percentage column
+-- divides by the total customer count fetched from a scalar subquery, which
+-- runs only once thanks to Oracle's caching of constant subqueries.
 --------------------------------------------------------------------------------
 SELECT  t.TARIFF_ID,
-        t.NAME                                AS TARIFF_NAME,
-        COUNT(c.CUSTOMER_ID)                  AS CUSTOMER_COUNT,
+        t.NAME                                              AS TARIFF_NAME,
+        COUNT(c.CUSTOMER_ID)                                AS CUSTOMER_COUNT,
         ROUND(
             COUNT(c.CUSTOMER_ID) * 100.0
             / NULLIF((SELECT COUNT(*) FROM CUSTOMERS), 0),
             2
-        )                                     AS PERCENTAGE
+        )                                                   AS PERCENTAGE
 FROM    TARIFFS    t
 LEFT JOIN CUSTOMERS c ON c.TARIFF_ID = t.TARIFF_ID
 GROUP BY t.TARIFF_ID, t.NAME
@@ -76,95 +85,110 @@ ORDER BY CUSTOMER_COUNT DESC;
 
 
 --==============================================================================
--- 3. Customer Signup Analysis
+-- Section 3 — Customer Signup Analysis
 --==============================================================================
 
 --------------------------------------------------------------------------------
--- 3.1 - Identify the earliest customers to sign up.
+-- 3.1  Earliest customers to sign up.
 --
--- The hint says CUSTOMER_ID is not necessarily aligned with signup order, so
--- I look at the actual SIGNUP_DATE column. I find the minimum date in a
--- subquery and return everyone who signed up on that exact date — there can
--- be more than one, so this handles ties without losing any of them.
+-- The brief warns that CUSTOMER_ID order does not match signup order, so I
+-- compute MIN(SIGNUP_DATE) inside a CTE and then return everyone matching it.
+-- Using a CTE keeps the date computation in one place and reads naturally —
+-- "find the min, then keep customers on that day". If two or more customers
+-- share the earliest date, all of them are returned (no arbitrary tiebreak).
 --------------------------------------------------------------------------------
+WITH first_day AS (
+    SELECT MIN(SIGNUP_DATE) AS first_signup_date
+    FROM   CUSTOMERS
+)
 SELECT  c.CUSTOMER_ID,
         c.NAME,
         c.CITY,
         c.SIGNUP_DATE
-FROM    CUSTOMERS c
-WHERE   c.SIGNUP_DATE = (SELECT MIN(SIGNUP_DATE) FROM CUSTOMERS)
+FROM    CUSTOMERS c, first_day fd
+WHERE   c.SIGNUP_DATE = fd.first_signup_date
 ORDER BY c.CUSTOMER_ID;
 
 
 --------------------------------------------------------------------------------
--- 3.2 - Distribution of these earliest customers across cities.
+-- 3.2  Distribution of those earliest customers across cities.
 --
--- I reuse the same "earliest signup date" filter and group by city to get
--- counts per city. The HAVING clause is not needed here because every grouped
--- city has at least one row by definition. I order by count descending so the
--- most populated city for the earliest cohort comes first.
+-- I reuse the same "first signup date" filter and group by CITY to get a
+-- per-city headcount. I order by count DESC so the most-represented city comes
+-- first, then by city name as a tiebreaker for deterministic output.
+-- Cities that have no customers in the earliest cohort are not in the result
+-- at all — they would be a separate ("empty") report if anyone asked for it.
 --------------------------------------------------------------------------------
+WITH first_day AS (
+    SELECT MIN(SIGNUP_DATE) AS first_signup_date
+    FROM   CUSTOMERS
+)
 SELECT  c.CITY,
         COUNT(*) AS CUSTOMER_COUNT
-FROM    CUSTOMERS c
-WHERE   c.SIGNUP_DATE = (SELECT MIN(SIGNUP_DATE) FROM CUSTOMERS)
+FROM    CUSTOMERS c, first_day fd
+WHERE   c.SIGNUP_DATE = fd.first_signup_date
 GROUP BY c.CITY
 ORDER BY CUSTOMER_COUNT DESC, c.CITY;
 
 
 --==============================================================================
--- 4. Missing Monthly Records
+-- Section 4 — Missing Monthly Records
 --==============================================================================
 
 --------------------------------------------------------------------------------
--- 4.1 - Customers whose monthly record is missing.
+-- 4.1  Customers whose monthly stats row is missing.
 --
--- An "anti-join" pattern fits this perfectly: LEFT JOIN MONTHLY_STATS to
--- CUSTOMERS, then keep only rows where the right side is NULL — those are the
--- customers without a matching monthly stats row. I picked LEFT JOIN over
--- NOT EXISTS because both perform similarly here and LEFT JOIN reads more
--- naturally next to the other queries in this file.
+-- I use NOT EXISTS with a correlated subquery — this expresses "give me each
+-- customer for whom no monthly_stats row exists" almost word-for-word, which
+-- I find clearer than the LEFT JOIN-with-null pattern for an anti-join. Oracle
+-- internally optimizes both the same way (anti-join), so the choice here is
+-- purely about readability rather than performance.
 --------------------------------------------------------------------------------
 SELECT  c.CUSTOMER_ID,
         c.NAME,
         c.CITY,
         c.SIGNUP_DATE
-FROM    CUSTOMERS     c
-LEFT JOIN MONTHLY_STATS m ON c.CUSTOMER_ID = m.CUSTOMER_ID
-WHERE   m.CUSTOMER_ID IS NULL
+FROM    CUSTOMERS c
+WHERE   NOT EXISTS (
+            SELECT 1
+            FROM   MONTHLY_STATS m
+            WHERE  m.CUSTOMER_ID = c.CUSTOMER_ID
+        )
 ORDER BY c.CUSTOMER_ID;
 
 
 --------------------------------------------------------------------------------
--- 4.2 - Distribution of the missing customers across cities.
+-- 4.2  Distribution of the missing customers across cities.
 --
--- Same anti-join as 4.1, this time grouped by city to count how many missing
--- customers each city has. I order by count desc to bring the most affected
--- cities to the top, which is what an ops team would want to see first.
--- Cities with no missing customers do not appear because they contribute 0
--- rows to the join — that is the correct behavior for "missing-only" stats.
+-- Same anti-join as 4.1, grouped by CITY. I order by count DESC so the most
+-- affected cities surface first — that is what an ops/data team would act on.
+-- A city with zero missing customers won't appear (it would not contribute
+-- a row), which is the correct behaviour for a "missing-only" breakdown.
 --------------------------------------------------------------------------------
 SELECT  c.CITY,
         COUNT(*) AS MISSING_COUNT
-FROM    CUSTOMERS     c
-LEFT JOIN MONTHLY_STATS m ON c.CUSTOMER_ID = m.CUSTOMER_ID
-WHERE   m.CUSTOMER_ID IS NULL
+FROM    CUSTOMERS c
+WHERE   NOT EXISTS (
+            SELECT 1
+            FROM   MONTHLY_STATS m
+            WHERE  m.CUSTOMER_ID = c.CUSTOMER_ID
+        )
 GROUP BY c.CITY
 ORDER BY MISSING_COUNT DESC, c.CITY;
 
 
 --==============================================================================
--- 5. Usage Analysis
+-- Section 5 — Usage Analysis
 --==============================================================================
 
 --------------------------------------------------------------------------------
--- 5.1 - Customers who used >= 75% of their data limit.
+-- 5.1  Customers who used at least 75% of their data limit.
 --
--- I join MONTHLY_STATS to CUSTOMERS to TARIFFS, because the data limit lives
--- on the tariff, not on the customer. I exclude rows where DATA_LIMIT = 0,
--- because dividing by zero is undefined and a tariff with no data allowance
--- (e.g. "Kurumsal SMS") cannot mathematically reach 75%. The threshold is
--- expressed as DATA_USAGE >= 0.75 * DATA_LIMIT to avoid the explicit division.
+-- The data limit lives on the tariff, so I have to join through CUSTOMERS to
+-- TARIFFS. I avoid a literal division (DATA_USAGE / DATA_LIMIT >= 0.75) and
+-- instead compare DATA_USAGE >= 0.75 * DATA_LIMIT — that side-steps the
+-- division-by-zero problem entirely for tariffs whose DATA_LIMIT = 0
+-- (e.g. "Kurumsal SMS" has no data allowance and therefore can't qualify).
 --------------------------------------------------------------------------------
 SELECT  c.CUSTOMER_ID,
         c.NAME,
@@ -182,13 +206,13 @@ ORDER BY USAGE_PERCENT DESC;
 
 
 --------------------------------------------------------------------------------
--- 5.2 - Customers who exhausted ALL their package limits (data, minutes, SMS).
+-- 5.2  Customers who exhausted ALL their package limits (data, minutes, SMS).
 --
--- "Exhausted" means usage has reached or exceeded the limit on every dimension.
--- I include a "limit > 0" guard for each dimension so a tariff that includes
--- 0 of something (like Kurumsal SMS with 0 data) doesn't count as "exhausted"
--- the moment it hits 0. A customer must be capped on data AND minutes AND sms
--- against the actual non-zero limits in their tariff for the row to qualify.
+-- A customer counts as "fully exhausted" only when they reached or exceeded
+-- the limit on every dimension. I add a ">0" guard for each limit so a tariff
+-- that simply does not include data / minutes / sms (limit = 0) doesn't count
+-- as "exhausted" by default. The SUM-of-CASE inside a HAVING was tempting,
+-- but a straight WHERE is faster and reads better at this scale.
 --------------------------------------------------------------------------------
 SELECT  c.CUSTOMER_ID,
         c.NAME,
@@ -207,16 +231,17 @@ ORDER BY c.CUSTOMER_ID;
 
 
 --==============================================================================
--- 6. Payment Analysis
+-- Section 6 — Payment Analysis
 --==============================================================================
 
 --------------------------------------------------------------------------------
--- 6.1 - Customers with unpaid fees.
+-- 6.1  Customers with unpaid fees.
 --
--- I join CUSTOMERS to MONTHLY_STATS and filter where the payment status is
--- not "PAID". I used "<> 'PAID'" rather than "= 'UNPAID'" so the query also
--- catches any other non-paid statuses that might exist (e.g. PENDING, OVERDUE).
--- Including the tariff name makes the result more useful for follow-up actions.
+-- I filter on PAYMENT_STATUS <> 'PAID' rather than = 'UNPAID' so the query
+-- catches any other non-paid statuses if they ever appear (PENDING, OVERDUE,
+-- FAILED, etc.). This is a small "future-proofing" choice — listing customers
+-- who still owe money is the goal, not matching one specific spelling. The
+-- IDX_MONTHLY_PAYMENT index handles the filter even on larger datasets.
 --------------------------------------------------------------------------------
 SELECT  c.CUSTOMER_ID,
         c.NAME,
@@ -231,21 +256,22 @@ ORDER BY c.CUSTOMER_ID;
 
 
 --------------------------------------------------------------------------------
--- 6.2 - Distribution of all payment statuses across the different tariffs.
+-- 6.2  Distribution of payment statuses across tariffs.
 --
--- I join the three tables and group by tariff name and payment status to get
--- a 2-D distribution: how many monthly records exist for each (tariff, status)
--- combination. I include a percentage of the tariff total via a window function
--- so it's easy to see, for example, "what % of Kobiye Destek records are UNPAID".
+-- I group by tariff name and payment status to get a 2-D distribution: how
+-- many monthly records exist for each (tariff, status) pair. The window
+-- function SUM(COUNT(*)) OVER (PARTITION BY t.NAME) gives the total per
+-- tariff, which I divide into to produce a per-tariff percentage — that
+-- answers questions like "what % of Kobiye Destek records are UNPAID".
 --------------------------------------------------------------------------------
-SELECT  t.NAME                                       AS TARIFF_NAME,
+SELECT  t.NAME                                          AS TARIFF_NAME,
         m.PAYMENT_STATUS,
-        COUNT(*)                                     AS RECORD_COUNT,
+        COUNT(*)                                        AS RECORD_COUNT,
         ROUND(
             COUNT(*) * 100.0
             / SUM(COUNT(*)) OVER (PARTITION BY t.NAME),
             2
-        )                                            AS PERCENT_OF_TARIFF
+        )                                               AS PERCENT_OF_TARIFF
 FROM    MONTHLY_STATS m
 JOIN    CUSTOMERS     c ON m.CUSTOMER_ID = c.CUSTOMER_ID
 JOIN    TARIFFS       t ON c.TARIFF_ID   = t.TARIFF_ID

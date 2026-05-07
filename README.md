@@ -1,47 +1,59 @@
-# Telco Project
+# 📊 Telco Project — Oracle XE + SQL
 
 > **Submission by Ahmet Yıldırım** — Yıldız Technical University, Computer Engineering
 > i2i Systems Summer Internship 2026 application.
 
-This repo contains my answers to the i2i Systems Telco SQL project: schema design,
-data import, and 12 SQL queries against an Oracle XE database running in Docker.
+This repo contains my answers to the i2i Systems Telco SQL project: a normalized
+schema for the provided telecom data, an Oracle XE container that bootstraps
+itself via Docker Compose, and 12 SQL queries (each documented in detail).
 
-## 📁 What's in this repo
+## 📁 Repo layout
 
-| File | What it is |
-| --- | --- |
-| `TABLE_CREATION_SCRIPTS.sql` | Schema: 3 tables, primary keys, foreign keys, check constraints, indexes |
-| `SOLUTIONS.sql` | All 12 SQL query answers, each with an explanatory comment block |
-| `docker-compose.yml` | Spins up Oracle XE locally and auto-runs the table creation script |
-| `TARIFFS.csv`, `CUSTOMERS.csv`, `MONTHLY_STATS.csv` | The provided source data |
+```
+telco-project/
+├── docker-compose.yml          # Oracle XE container + auto-init
+├── TABLE_CREATION_SCRIPTS.sql  # Schema: tables, FKs, checks, indexes
+├── SOLUTIONS.sql               # All 12 answers in one file (i2i requirement)
+├── queries/                    # Same 12 answers, split per section for review
+│   ├── 01_tariff_customers.sql
+│   ├── 02_tariff_distribution.sql
+│   ├── 03_signup_analysis.sql
+│   ├── 04_missing_records.sql
+│   ├── 05_usage_analysis.sql
+│   └── 06_payment_analysis.sql
+├── TARIFFS.csv                 # Provided source data
+├── CUSTOMERS.csv
+├── MONTHLY_STATS.csv
+└── README.md
+```
 
-## 🛠️ How to reproduce my setup
+I keep both `SOLUTIONS.sql` (combined, as the brief asks) and `queries/` (split
+per section). The combined file is the canonical deliverable; the split files
+made it easier for me to run / debug one section at a time during development.
+
+## 🛠️ How to reproduce
 
 ### Prerequisites
-
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- [DBeaver](https://dbeaver.io/) (or any Oracle-compatible SQL client)
+- [DBeaver Community](https://dbeaver.io/) (or any Oracle-compatible client)
 
-### 1. Start the database
+### 1 · Start the database
 
 ```bash
 docker compose up -d
 ```
 
-The first start takes ~2 minutes while the Oracle image initialises and runs my
-table creation script automatically.
-
-You can watch the progress with:
+The first start takes ~2 minutes — the image initialises Oracle XE *and* runs
+my table creation script automatically (mounted into
+`/container-entrypoint-initdb.d/`). Watch progress with:
 
 ```bash
 docker compose logs -f oracle-xe
 ```
 
-When you see `DATABASE IS READY TO USE!`, the DB is up.
+When the log shows `DATABASE IS READY TO USE!`, the schema is already in place.
 
-### 2. Connect with DBeaver
-
-In DBeaver: **Database → New Database Connection → Oracle**, then:
+### 2 · Connect from DBeaver
 
 | Field | Value |
 | --- | --- |
@@ -51,104 +63,93 @@ In DBeaver: **Database → New Database Connection → Oracle**, then:
 | Username | `TELCO` |
 | Password | `telco_pass` |
 
-Hit **Test Connection** — you should be in.
+Click **Test Connection** — you should be in.
 
-### 3. Import the CSVs
+### 3 · Import the CSVs
 
-The tables are already created (the Docker image ran `TABLE_CREATION_SCRIPTS.sql`
-on startup). Now load the data via DBeaver:
+The tables already exist. Now load the data via DBeaver — for each CSV:
 
-For each CSV (`TARIFFS.csv`, `CUSTOMERS.csv`, `MONTHLY_STATS.csv`):
+1. Right-click the matching table → **Import Data**
+2. Source: **CSV** → pick the file
+3. Map the columns (defaults usually match the headers)
+4. **For `CUSTOMERS.csv`** set the date format to `DD/MM/YYYY` so `SIGNUP_DATE` parses
+5. Run the import
 
-1. Right-click the matching table → **Import Data**.
-2. Source: **CSV** → pick the file.
-3. Map the columns (defaults usually match).
-4. **For `CUSTOMERS.csv`**, set the date format to **`DD/MM/YYYY`** so `SIGNUP_DATE` parses correctly.
-5. Run the import.
+> **Order matters** because of the foreign keys: import `TARIFFS` first, then
+> `CUSTOMERS`, then `MONTHLY_STATS`.
 
-> **Order matters**: import `TARIFFS` first, then `CUSTOMERS`, then `MONTHLY_STATS` — the foreign keys require the parent rows to exist.
+### 4 · Run the queries
 
-### 4. Run the queries
-
-Open `SOLUTIONS.sql` in DBeaver and execute each block. Each query has a comment
-block above it explaining what it does and why.
+Open `SOLUTIONS.sql` (or any single file from `queries/`) in DBeaver and run
+each statement. Every query has a comment block above it explaining what it
+does, the joins involved, and any edge case I considered.
 
 ## 🧠 Schema decisions
 
-- **DATE for SIGNUP_DATE** instead of VARCHAR — lets the database sort and filter
-  chronologically without string parsing each time, and the "earliest customer"
-  query (3.1) needs real date semantics.
-- **Foreign keys** between CUSTOMERS → TARIFFS and MONTHLY_STATS → CUSTOMERS so
-  the database itself enforces referential integrity. If a CSV row references
-  a non-existent tariff or customer, the import fails loudly instead of leaving
-  dangling rows behind.
-- **CHECK constraints** on all numeric columns (`>= 0`) because negative usage,
-  fee or limit values would be data corruption.
-- **Indexes** on the columns I actually filter / join on:
+- **`SIGNUP_DATE` is a real `DATE`** — lets the database sort and filter
+  chronologically without parsing strings each time. Section 3 ("earliest
+  customers") needs real date semantics; the hint warns IDs do not match
+  signup order.
+- **Foreign keys** between `CUSTOMERS → TARIFFS` and `MONTHLY_STATS → CUSTOMERS`
+  so the database itself enforces referential integrity. A bad CSV row fails
+  loudly on import instead of leaving dangling references.
+- **`CHECK (>= 0)` constraints** on every numeric column — negative usage,
+  fees or limits would be data corruption, so I'd rather catch it at insert.
+- **Indexes** on the columns I actually filter or join on:
   `CUSTOMERS.TARIFF_ID`, `CUSTOMERS.CITY`, `CUSTOMERS.SIGNUP_DATE`,
   `MONTHLY_STATS.CUSTOMER_ID`, `MONTHLY_STATS.PAYMENT_STATUS`.
-  No indexes on columns that are never filtered (avoids write overhead).
+  No indexes on columns no query touches, to keep insert overhead low.
+- **Idempotent DDL** — `TABLE_CREATION_SCRIPTS.sql` drops the tables in reverse
+  FK order before creating them, so it can be re-run safely.
 
-## 🧠 Query notes
+## 🧠 Query decisions worth flagging
 
 A few highlights — full reasoning is in the comment block above each query:
 
-- **3.1** — "earliest customer" uses `MIN(SIGNUP_DATE)` in a subquery, since the
-  hint warns IDs and signup order are not aligned.
-- **4.1** — "missing monthly records" uses an anti-join (`LEFT JOIN ... WHERE
-  right side IS NULL`) — clean and reads naturally.
+- **1.2** — uses `ROW_NUMBER() OVER` in a CTE rather than `FETCH FIRST WITH TIES`,
+  because the CTE pattern is easier to extend if the team later asks for
+  "newest 5" or "newest per city".
+- **3.1 / 3.2** — minimum signup date is computed once in a CTE (`first_day`)
+  and reused, instead of re-running `MIN(SIGNUP_DATE)` per query.
+- **4.1 / 4.2** — uses `NOT EXISTS` (correlated subquery) for the anti-join.
+  Reads more naturally than `LEFT JOIN ... IS NULL`; Oracle optimises both
+  the same way.
 - **5.1** — guards against divide-by-zero by excluding tariffs where
-  `DATA_LIMIT = 0`.
-- **5.2** — only counts a dimension as "exhausted" when the limit is greater
-  than zero, so a tariff with 0 SMS doesn't trivially mark every customer
-  as having "exhausted" SMS.
-- **6.1** — uses `<> 'PAID'` rather than `= 'UNPAID'` so the query catches any
-  other non-paid statuses if they exist (PENDING, OVERDUE, etc.).
+  `DATA_LIMIT = 0` and by comparing `DATA_USAGE >= 0.75 * DATA_LIMIT` (no
+  literal division involved).
+- **5.2** — only counts a dimension as "exhausted" when its limit is `> 0`,
+  so a 0-allowance plan doesn't trivially mark every customer as exhausted.
+- **6.1** — `<> 'PAID'` instead of `= 'UNPAID'`, so any other non-paid status
+  is included automatically.
+- **6.2** — uses `SUM(COUNT(*)) OVER (PARTITION BY tariff)` to compute per-tariff
+  percentages in a single pass without a self-join.
 
-## 🧹 Stopping the database
+## 🧹 Stop / reset
 
 ```bash
-docker compose down          # stop and remove the container
-docker compose down -v       # also wipe the data volume
+docker compose down            # stop and remove the container
+docker compose down -v         # also wipe the data volume (start fresh next run)
 ```
 
 ---
 
-## Original Project Brief (from i2i Systems)
+## Original brief (from i2i Systems)
 
-In this project, you take on the role of a developer at **i2i Systems**, fulfilling
-team requests through database operations against telecom data delivered as CSVs.
+You take on the role of a developer at **i2i Systems**, fulfilling team requests
+through database operations against telecom CSV data.
 
-### Operational Requirements
+**Operational requirements**
 
-1. **Oracle XE Setup** — Run Oracle XE in a Docker container, accessible from your local machine.
-2. **DBeaver Installation** — Connect to the Oracle XE instance.
-3. **Data Import** — Design the necessary tables and import the provided `.csv` data.
-4. **Bonus Tasks** — Provide a `docker-compose.yml` and configure automated DB seeding.
+1. **Oracle XE Setup** — Run Oracle XE in Docker, accessible from local.
+2. **DBeaver Installation** — Connect to the local Oracle XE.
+3. **Data Import** — Design tables and import the provided `.csv` data.
+4. **Bonus** — Provide `docker-compose.yml` and configure automated DB seeding.
 
-### Functional Requirements
+**Functional requirements** (each query needs ≥ 3 sentences of explanation):
 
-Write SQL queries (with comments of at least 3 sentences each) for:
-
-#### 1. Tariff-Based Customer Queries
-- **1.1** List customers subscribed to the `Kobiye Destek` tariff.
-- **1.2** Newest customer of that tariff.
-
-#### 2. Tariff Distribution
-- **2.1** Distribution of tariffs across customers.
-
-#### 3. Customer Signup Analysis
-- **3.1** Earliest customers to sign up *(IDs may not match signup order)*.
-- **3.2** Distribution of those earliest customers across cities.
-
-#### 4. Missing Monthly Records
-- **4.1** Customers with missing monthly stats.
-- **4.2** Distribution of those missing customers across cities.
-
-#### 5. Usage Analysis
-- **5.1** Customers using ≥ 75% of their data limit.
-- **5.2** Customers who have exhausted ALL package limits (data, minutes, SMS).
-
-#### 6. Payment Analysis
-- **6.1** Customers with unpaid fees.
-- **6.2** Distribution of payment statuses across tariffs.
+1. Tariff-based queries — *Kobiye Destek* customers; newest customer.
+2. Tariff distribution across customers.
+3. Signup analysis — earliest customers (IDs may not match order); city distribution.
+4. Missing monthly records — find them; city distribution.
+5. Usage — ≥ 75% data usage; full exhaustion (data + minutes + SMS).
+6. Payment — unpaid fees; status distribution per tariff.
