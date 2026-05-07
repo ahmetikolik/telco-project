@@ -1,119 +1,154 @@
 # Telco Project
 
-## How to Set Up Your Repository
+> **Submission by Ahmet Yıldırım** — Yıldız Technical University, Computer Engineering
+> i2i Systems Summer Internship 2026 application.
 
-**WARNING**: This is a template project. Do not fork this repository.
+This repo contains my answers to the i2i Systems Telco SQL project: schema design,
+data import, and 12 SQL queries against an Oracle XE database running in Docker.
 
-Please follow the visual steps below to create and set up the project repository on your own GitHub profile.
+## 📁 What's in this repo
 
-1. Click the **"Use this template"** button at the top right of this page.
+| File | What it is |
+| --- | --- |
+| `TABLE_CREATION_SCRIPTS.sql` | Schema: 3 tables, primary keys, foreign keys, check constraints, indexes |
+| `SOLUTIONS.sql` | All 12 SQL query answers, each with an explanatory comment block |
+| `docker-compose.yml` | Spins up Oracle XE locally and auto-runs the table creation script |
+| `TARIFFS.csv`, `CUSTOMERS.csv`, `MONTHLY_STATS.csv` | The provided source data |
 
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/547179ce-f2ac-4394-ad63-11e35a7daa74" />
+## 🛠️ How to reproduce my setup
 
-<br><br>
+### Prerequisites
 
-2. Select **"Create a new repository"** to generate your own public repository for this task.
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [DBeaver](https://dbeaver.io/) (or any Oracle-compatible SQL client)
 
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/a1893fef-731f-4c9a-bf68-79db6a39bea9" />
+### 1. Start the database
 
-<br><br>
+```bash
+docker compose up -d
+```
 
-3. Name your repository as **"telco-project"** and click the **"Create repository"** button.
+The first start takes ~2 minutes while the Oracle image initialises and runs my
+table creation script automatically.
 
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/7fe03880-8d77-4fcd-a076-827aab2328e5" />
+You can watch the progress with:
 
-<br><br>
+```bash
+docker compose logs -f oracle-xe
+```
 
-Upload all of your solutions to `github.com/yourusername/telco-project`.
+When you see `DATABASE IS READY TO USE!`, the DB is up.
+
+### 2. Connect with DBeaver
+
+In DBeaver: **Database → New Database Connection → Oracle**, then:
+
+| Field | Value |
+| --- | --- |
+| Host | `localhost` |
+| Port | `1521` |
+| Database / Service | `XEPDB1` |
+| Username | `TELCO` |
+| Password | `telco_pass` |
+
+Hit **Test Connection** — you should be in.
+
+### 3. Import the CSVs
+
+The tables are already created (the Docker image ran `TABLE_CREATION_SCRIPTS.sql`
+on startup). Now load the data via DBeaver:
+
+For each CSV (`TARIFFS.csv`, `CUSTOMERS.csv`, `MONTHLY_STATS.csv`):
+
+1. Right-click the matching table → **Import Data**.
+2. Source: **CSV** → pick the file.
+3. Map the columns (defaults usually match).
+4. **For `CUSTOMERS.csv`**, set the date format to **`DD/MM/YYYY`** so `SIGNUP_DATE` parses correctly.
+5. Run the import.
+
+> **Order matters**: import `TARIFFS` first, then `CUSTOMERS`, then `MONTHLY_STATS` — the foreign keys require the parent rows to exist.
+
+### 4. Run the queries
+
+Open `SOLUTIONS.sql` in DBeaver and execute each block. Each query has a comment
+block above it explaining what it does and why.
+
+## 🧠 Schema decisions
+
+- **DATE for SIGNUP_DATE** instead of VARCHAR — lets the database sort and filter
+  chronologically without string parsing each time, and the "earliest customer"
+  query (3.1) needs real date semantics.
+- **Foreign keys** between CUSTOMERS → TARIFFS and MONTHLY_STATS → CUSTOMERS so
+  the database itself enforces referential integrity. If a CSV row references
+  a non-existent tariff or customer, the import fails loudly instead of leaving
+  dangling rows behind.
+- **CHECK constraints** on all numeric columns (`>= 0`) because negative usage,
+  fee or limit values would be data corruption.
+- **Indexes** on the columns I actually filter / join on:
+  `CUSTOMERS.TARIFF_ID`, `CUSTOMERS.CITY`, `CUSTOMERS.SIGNUP_DATE`,
+  `MONTHLY_STATS.CUSTOMER_ID`, `MONTHLY_STATS.PAYMENT_STATUS`.
+  No indexes on columns that are never filtered (avoids write overhead).
+
+## 🧠 Query notes
+
+A few highlights — full reasoning is in the comment block above each query:
+
+- **3.1** — "earliest customer" uses `MIN(SIGNUP_DATE)` in a subquery, since the
+  hint warns IDs and signup order are not aligned.
+- **4.1** — "missing monthly records" uses an anti-join (`LEFT JOIN ... WHERE
+  right side IS NULL`) — clean and reads naturally.
+- **5.1** — guards against divide-by-zero by excluding tariffs where
+  `DATA_LIMIT = 0`.
+- **5.2** — only counts a dimension as "exhausted" when the limit is greater
+  than zero, so a tariff with 0 SMS doesn't trivially mark every customer
+  as having "exhausted" SMS.
+- **6.1** — uses `<> 'PAID'` rather than `= 'UNPAID'` so the query catches any
+  other non-paid statuses if they exist (PENDING, OVERDUE, etc.).
+
+## 🧹 Stopping the database
+
+```bash
+docker compose down          # stop and remove the container
+docker compose down -v       # also wipe the data volume
+```
 
 ---
 
-## Overview
+## Original Project Brief (from i2i Systems)
 
-In this project, you will take on the role of a developer at **i2i Systems**, where you are tasked with fulfilling various team requests through database operations. 
+In this project, you take on the role of a developer at **i2i Systems**, fulfilling
+team requests through database operations against telecom data delivered as CSVs.
 
-You will receive `.csv` files containing telecom-related data to use for answering the provided questions. Please organize your work as follows:
-* Save your SQL query solutions in a separate file (e.g., `SOLUTIONS.sql`).
-* Include your database table creation scripts, along with their respective indexes and constraints, in another separate file (e.g., `TABLE_CREATION_SCRIPTS.sql`).
+### Operational Requirements
 
-You must **create your own repository using this template** and upload your work there. 
-Do **not** attempt to push changes directly to this repository or any of its original branches.
+1. **Oracle XE Setup** — Run Oracle XE in a Docker container, accessible from your local machine.
+2. **DBeaver Installation** — Connect to the Oracle XE instance.
+3. **Data Import** — Design the necessary tables and import the provided `.csv` data.
+4. **Bonus Tasks** — Provide a `docker-compose.yml` and configure automated DB seeding.
 
----
+### Functional Requirements
 
-## Operational Requirements
+Write SQL queries (with comments of at least 3 sentences each) for:
 
-1. **Oracle XE Setup**
-  * Create a [Docker](https://www.docker.com/products/docker-desktop/) container running **Oracle XE**.  
-  * Ensure that the database is properly configured and accessible from your local machine.
+#### 1. Tariff-Based Customer Queries
+- **1.1** List customers subscribed to the `Kobiye Destek` tariff.
+- **1.2** Newest customer of that tariff.
 
-2. **DBeaver Installation**
-  * Download and install [DBeaver](https://dbeaver.io/).  
-  * Establish a connection to your local Oracle XE instance using the DBeaver client.
+#### 2. Tariff Distribution
+- **2.1** Distribution of tariffs across customers.
 
-3. **Data Import**
-  * Using the provided `.csv` files containing telecom data, design and **create the necessary tables** in Oracle XE. 
-  * **Import the data** from the `.csv` files into your newly created tables, ensuring the schema accurately reflects the provided dataset.
+#### 3. Customer Signup Analysis
+- **3.1** Earliest customers to sign up *(IDs may not match signup order)*.
+- **3.2** Distribution of those earliest customers across cities.
 
-4. **Bonus Tasks (Optional for Extra Points)**
-  * **Docker Compose & Reproducibility:** Provide a `docker-compose.yml` file to spin up the Oracle XE database environment easily. Include clear documentation in your repository (with screenshots) explaining the step-by-step process to reproduce your setup.
-  * **Automated Database Seeding:** Configure your Docker Compose setup to automatically run your database scripts (table creation) upon container initialization.
+#### 4. Missing Monthly Records
+- **4.1** Customers with missing monthly stats.
+- **4.2** Distribution of those missing customers across cities.
 
----
+#### 5. Usage Analysis
+- **5.1** Customers using ≥ 75% of their data limit.
+- **5.2** Customers who have exhausted ALL package limits (data, minutes, SMS).
 
-## Functional Requirements
-
-You must write SQL queries to address the scenarios listed below. For each query, include comments explaining your approach in **at least three sentences**. Submissions with missing answers or explanations shorter than the required length will **not be evaluated** and will receive **0 points**.
-
----
-
-### 1. Tariff-Based Customer Queries
-
-**1.1** List the customers who are subscribed to the 'Kobiye Destek' tariff.  
-**1.2** Find the newest customer who subscribed to this tariff.
-
----
-
-### 2. Tariff Distribution
-
-**2.1** Find the distribution of tariffs among the customers.
-
----
-
-### 3. Customer Signup Analysis
-
-**3.1** Identify the earliest customers to sign up.  
-*(Hint: The earliest customers might not necessarily have the lowest IDs.)*
-
-**3.2** Find the distribution of these earliest customers across different cities, including the total count for each city.
-
----
-
-### 4. Missing Monthly Records
-
-**4.1** Every customer has a monthly fee, and the dataset contains this month's usage values. However, an insertion error occurred, and some customers' monthly records are missing. Identify the IDs of these missing customers.
-
-**4.2** Find the distribution of these missing customers across different cities.
-
----
-
-### 5. Usage Analysis
-
-**5.1** Find the customers who have used at least 75% of their data limit.  
-**5.2** Identify the customers who have completely exhausted all of their package limits (data, minutes, and SMS).
-
----
-
-### 6. Payment Analysis
-
-**6.1** Find the customers who have unpaid fees.  
-**6.2** Find the distribution of all payment statuses across the different tariffs.
-
----
-
-## Notes
-
-* You have the creative freedom to design the database schema as you see fit, based on the provided dataset.
-* Pay close attention to applying the appropriate data types and constraints when creating your tables.
-* You may use DBeaver or SQL*Plus to handle the `.csv` data imports into Oracle XE.
-* Thoroughly test each query and document both the SQL statement and its resulting output in your submission.
+#### 6. Payment Analysis
+- **6.1** Customers with unpaid fees.
+- **6.2** Distribution of payment statuses across tariffs.

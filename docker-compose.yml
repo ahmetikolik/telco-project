@@ -1,0 +1,44 @@
+# Oracle XE 21c via the community image (no Oracle SSO login required).
+# This file spins up the database AND auto-creates the tables on first run.
+#
+# Usage:
+#   docker compose up -d
+#
+# Connection info for DBeaver (or any client):
+#   Host:      localhost
+#   Port:      1521
+#   Service:   XEPDB1
+#   Username:  TELCO
+#   Password:  telco_pass
+#
+# After the container is up, tables will already be created via the init script.
+# Then import the three CSV files (TARIFFS, CUSTOMERS, MONTHLY_STATS) using
+# DBeaver's Tools -> Data Import wizard. See README.md for step-by-step.
+
+services:
+  oracle-xe:
+    image: gvenzl/oracle-xe:21-slim-faststart
+    container_name: telco-oracle-xe
+    restart: unless-stopped
+    ports:
+      - "1521:1521"
+    environment:
+      # System password (used for SYS / SYSTEM accounts)
+      ORACLE_PASSWORD: oracle_root_pass
+      # Application user that the project tables belong to
+      APP_USER: TELCO
+      APP_USER_PASSWORD: telco_pass
+    volumes:
+      # Persist database files between container restarts
+      - oracle_data:/opt/oracle/oradata
+      # Auto-run table creation on first startup.
+      # Anything mounted here runs once when the DB initialises.
+      - ./TABLE_CREATION_SCRIPTS.sql:/container-entrypoint-initdb.d/01_tables.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+volumes:
+  oracle_data:
