@@ -1,5 +1,7 @@
 # Oracle XE 21c via the community image (no Oracle SSO login required).
-# This file spins up the database AND auto-creates the tables on first run.
+# This file spins up the database AND runs the project setup automatically:
+#   - creates the tables in the TELCO schema (XEPDB1 pluggable DB)
+#   - imports the three CSVs via Oracle external tables
 #
 # Usage:
 #   docker compose up -d
@@ -11,9 +13,8 @@
 #   Username:  TELCO
 #   Password:  telco_pass
 #
-# After the container is up, tables will already be created via the init script.
-# Then import the three CSV files (TARIFFS, CUSTOMERS, MONTHLY_STATS) using
-# DBeaver's Tools -> Data Import wizard. See README.md for step-by-step.
+# After the container is up the schema is fully populated — no manual steps.
+# See README.md for the step-by-step verification.
 
 services:
   oracle-xe:
@@ -23,17 +24,29 @@ services:
     ports:
       - "1521:1521"
     environment:
-      # System password (used for SYS / SYSTEM accounts)
+      # SYS / SYSTEM password (admin-level)
       ORACLE_PASSWORD: oracle_root_pass
-      # Application user that the project tables belong to
+      # Application user that owns the project tables
       APP_USER: TELCO
       APP_USER_PASSWORD: telco_pass
     volumes:
       # Persist database files between container restarts
       - oracle_data:/opt/oracle/oradata
-      # Auto-run table creation on first startup.
-      # Anything mounted here runs once when the DB initialises.
-      - ./TABLE_CREATION_SCRIPTS.sql:/container-entrypoint-initdb.d/01_tables.sql:ro
+
+      # Setup assets — the SQL scripts and the CSVs are mounted at known paths
+      # inside the container so the bootstrap shell script (below) can find them.
+      - ./TABLE_CREATION_SCRIPTS.sql:/opt/init/TABLE_CREATION_SCRIPTS.sql:ro
+      - ./init/02_load_csv_data.sql:/opt/init/02_load_csv_data.sql:ro
+      - ./TARIFFS.csv:/opt/csv/TARIFFS.csv:ro
+      - ./CUSTOMERS.csv:/opt/csv/CUSTOMERS.csv:ro
+      - ./MONTHLY_STATS.csv:/opt/csv/MONTHLY_STATS.csv:ro
+
+      # Bootstrap script — runs once on first DB init.
+      # gvenzl/oracle-xe runs anything in /container-entrypoint-initdb.d/ after
+      # the DB is up. The shell script here connects to XEPDB1 as TELCO
+      # explicitly, which is the reliable way to land the schema in the right
+      # place across image versions.
+      - ./init/01_run_setup.sh:/container-entrypoint-initdb.d/01_run_setup.sh:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh"]
       interval: 30s
