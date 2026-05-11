@@ -1,7 +1,6 @@
 # 📊 Telco Project — Oracle XE + SQL
 
-> **Submission by Ahmet Yıldırım** — Yıldız Technical University, Computer Engineering
-> i2i Systems Summer Internship 2026 application.
+
 
 This repo contains my answers to the i2i Systems Telco SQL project: a normalized
 schema for the provided telecom data, an Oracle XE container that bootstraps
