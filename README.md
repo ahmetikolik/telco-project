@@ -132,7 +132,7 @@ docker compose down -v         # also wipe the data volume (start fresh next run
 
 ---
 
-## Original brief (from i2i Systems)
+## Original brief 
 
 You take on the role of a developer at **i2i Systems**, fulfilling team requests
 through database operations against telecom CSV data.
